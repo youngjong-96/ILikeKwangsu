@@ -17,6 +17,7 @@
     "openai": "^6.34.0",
     "react": "19.2.4",
     "react-chartjs-2": "^5.3.1",
+    "react-d3-cloud": "^1.0.6",
     "react-dom": "19.2.4",
     "tailwind-merge": "^3.5.0"
   },

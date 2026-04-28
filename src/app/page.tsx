@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Mic, Square, Upload, BarChart3, MessageSquare, Play, Trash2, Headphones } from 'lucide-react';
+import WordCloud from '@/components/WordCloud';
 
 export default function Home() {
   // 1. Hydration 오류 방지를 위한 마운트 상태 관리
@@ -175,8 +176,65 @@ export default function Home() {
               </button>
             </div>
           </div>
+          
 
           {/* 결과 섹션 */}
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 min-h-[500px] flex flex-col">
+              <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 border-b pb-4">
+                <BarChart3 className="w-5 h-5 text-purple-500" /> 분석 리포트
+              </h2>
+              
+              {result ? (
+                <div className="flex-1 space-y-6">
+                {/* 시각화 영역: 높이를 고정해서 너무 커지지 않게 제어 */}
+                <div>
+                  <p className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-wider text-center">단어 클라우드</p>
+                  <div className="bg-white rounded-xl shadow-inner border border-gray-50 overflow-hidden">
+                    <WordCloud words={result} />
+                  </div>
+                </div>
+
+                {/* 전체 텍스트: 높이를 줄이고 스크롤 적용 */}
+                <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <p className="text-xs font-bold text-gray-400 mb-2 uppercase">전체 텍스트</p>
+                  <div className="text-gray-600 text-sm leading-relaxed max-h-20 overflow-y-auto italic">
+                    "{transcribedText}"
+                  </div>
+                </div>
+
+                {/* 상세 빈도: 깔끔하게 한 줄씩 표시 */}
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-gray-400 uppercase mb-2">핵심 키워드 Top 5</p>
+                  <div className="grid grid-cols-1 gap-2">
+                    {result.slice(0, 5).map((item, index) => (
+                      <div key={index} className="flex items-center justify-between px-3 py-2 bg-white border border-gray-100 rounded-md shadow-sm text-sm">
+                        <span className="text-gray-700">
+                          <span className="text-blue-500 font-bold mr-2">#{index + 1}</span>
+                          {item.word}
+                        </span>
+                        <span className="text-gray-400 font-medium">{item.count}회</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                {isAnalyzing ? (
+                  <div className="flex flex-col items-center">
+                    <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                    <p className="text-blue-500 font-medium">GMS가 음성을 텍스트로 변환하고 있습니다...</p>
+                  </div>
+                ) : (
+                  <>
+                    <MessageSquare className="w-16 h-16 mb-4 opacity-10" />
+                    <p className="text-center">왼쪽에서 음성을 녹음하거나<br />파일을 업로드하면 분석이 시작됩니다.</p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          {/* 결과 섹션
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 min-h-[500px] flex flex-col">
             <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 border-b pb-4">
               <BarChart3 className="w-5 h-5 text-purple-500" /> 분석 리포트
@@ -218,7 +276,7 @@ export default function Home() {
                 )}
               </div>
             )}
-          </div>
+          </div> */}
         </div>
       </div>
     </main>
