@@ -6,26 +6,27 @@ interface TranscribedTextProps {
 
 /**
  * TranscribedText 컴포넌트
- * - STT(Speech-to-Text) 변환 결과 원문 텍스트를 표시
- * - 최대 높이(max-h-40) 초과 시 스크롤 가능
+ * - STT 변환 원문을 표시
+ * - 부모(AnalysisReport 우측 컬럼)가 overflow-y-auto를 담당하므로
+ *   자체 max-h 제거 — 텍스트가 길어도 부모 스크롤로 처리
  */
 export default function TranscribedText({ text }: TranscribedTextProps) {
   return (
     <div
-      className="p-5 rounded-2xl border flex flex-col"
+      className="p-4 rounded-2xl border flex flex-col shrink-0"
       style={{ background: "#FFF8DE", borderColor: "var(--color-accent-light)" }}
     >
       {/* 섹션 라벨 */}
       <p
-        className="text-[10px] font-black uppercase tracking-widest mb-3"
+        className="text-[10px] font-black uppercase tracking-widest mb-2"
         style={{ color: "var(--color-accent)" }}
       >
         Transcribed Text
       </p>
 
-      {/* 변환 텍스트 본문 - 이탤릭체, 스크롤 가능 */}
+      {/* 변환 텍스트 본문 — 부모 컨테이너가 스크롤 담당 */}
       <div
-        className="text-sm leading-relaxed italic overflow-y-auto max-h-40 pr-1"
+        className="text-xs leading-relaxed italic overflow-hidden line-clamp-4"
         style={{ color: "var(--color-text-secondary)" }}
       >
         &ldquo;{text}&rdquo;
