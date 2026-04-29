@@ -6,6 +6,11 @@
 음성을 실시간 녹음하거나 파일을 업로드하면, OpenAI Whisper STT로 텍스트를 변환하고 가장 많이 사용된 단어를 워드 클라우드와 랭킹으로 시각화합니다.
 
 ---
+## 미리 보기
+메인 화면
+![mainpage](src/asset/mainpage.png)
+분석 화면
+![analysis](src/asset/analysis.png)
 
 ## ✨ 주요 기능
 
