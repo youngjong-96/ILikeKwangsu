@@ -1,26 +1,122 @@
 @import "tailwindcss";
 
+/* ===================================================
+   온글잎 박다현체 웹폰트 (jsdelivr CDN)
+   출처: noonnu.cc / projectnoonnu
+   =================================================== */
+@font-face {
+  font-family: 'Ownglyph_ParkDaHyun';
+  src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/2411-3@1.0/Ownglyph_ParkDaHyun.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ===================================================
+   디자인 시스템 변수 (design.md 컬러 팔레트 기반)
+   - 크림/노란 계열 배경, 파스텔 파란 계열 포인트
+   =================================================== */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* 배경색: 진한 크림 */
+  --color-bg-main: #FFF2C6;
+  /* 카드/섹션 배경: 밝은 크림 */
+  --color-bg-card: #FFF8DE;
+  /* 포인트 컬러: 밝은 파스텔 파란 */
+  --color-accent-light: #AAC4F5;
+  /* 포인트 컬러: 진한 파스텔 파란 */
+  --color-accent: #8CA9FF;
+  /* 텍스트 기본 */
+  --color-text-primary: #2D2D2D;
+  --color-text-secondary: #6B6B6B;
+  /* 테두리 */
+  --color-border: rgba(140, 169, 255, 0.25);
+  /* 그림자 */
+  --shadow-card: 0 4px 24px rgba(140, 169, 255, 0.15);
+  --shadow-accent: 0 4px 16px rgba(140, 169, 255, 0.35);
 }
 
+/* Tailwind 테마 변수 연결 */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--color-bg-main);
+  --color-foreground: var(--color-text-primary);
+  --font-sans: var(--font-parkdahyun);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ===================================================
+   베이스 리셋 및 전역 스타일
+   =================================================== */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg-main);
+  color: var(--color-text-primary);
+  /* 온글잎 박다현체를 기본, 미로드 시 한국어 폰트로 fallback */
+  font-family: 'Ownglyph_ParkDaHyun', 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+/* ===================================================
+   커스텀 스크롤바
+   =================================================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg-card);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-accent-light);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent);
+}
+
+/* ===================================================
+   애니메이션 유틸리티
+   =================================================== */
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scalePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.animate-fade-slide-up {
+  animation: fadeSlideUp 0.5s ease forwards;
+}
+
+.animate-scale-pulse {
+  animation: scalePulse 1.4s ease-in-out infinite;
+}
+
+/* ===================================================
+   오디오 플레이어 커스텀 스타일
+   =================================================== */
+audio {
+  accent-color: var(--color-accent);
 }

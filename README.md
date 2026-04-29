@@ -69,5 +69,3 @@ npm run dev
 업데이트 예정:
 
 조사(은, 는, 이, 가 등)를 제외하고 의미 있는 명사만 추출하기 위해 KoNLPy 또는 n-gram 분석 기법 도입 예정
-
-분석 결과를 차트(Bar Chart, Word Cloud)로 시각화하는 기능 추가
