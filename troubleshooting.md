@@ -133,6 +133,54 @@ Missing required scale: model.decoder.embed_tokens.weight_merged_0_scale
 
 ---
 
+## 2026-05-05 - 모바일 STT 세션 생성 실패 2차 대응
+
+### 증상
+
+- 1차 대응 이후에도 모바일에서 동일한 세션 생성 오류가 반복되었다.
+- 사용자가 확인한 에러 메시지는 여전히 아래와 같은 형태였다.
+
+```text
+Can't create a session. ERROR_CODE: 1
+TransposeDQWeightsForMatMulNBits
+Missing required scale
+```
+
+### 재현 조건
+
+- 모바일 브라우저에서 녹음 후 분석을 시작한다.
+- 모델 다운로드가 완료된 이후 실제 Whisper 세션 초기화 단계에서 오류가 발생한다.
+
+### 원인 추정
+
+- `automatic-speech-recognition` 파이프라인의 Whisper는 `AutoModelForSpeechSeq2Seq` 경로를 사용한다.
+- 따라서 모바일에서 실제로 여는 주요 세션은 `encoder_model`, `decoder_model_merged` 중심인데, 이전 대응은 모바일 dtype 재시도 방향이 충분히 보수적이지 않았다.
+- 또한 같은 모델 소스 안에서 dtype만 바꾸는 우회로는 특정 모바일 브라우저 조합에서 동일한 세션 생성 오류를 완전히 피하지 못했을 가능성이 있다.
+
+### 수정 내용
+
+- 모바일 기본 런타임을 `Xenova/whisper-tiny + WASM + fp32`로 더 보수적으로 고정했다.
+- 모바일 분석 허용 길이를 20초로 더 줄이고, chunk 길이도 8초 기준으로 더 짧게 잡았다.
+- 모바일에서 현재 오류 패턴이 감지되면 캐시된 파이프라인을 초기화한 뒤, `onnx-community/whisper-tiny + WASM + fp32` 대체 경로로 한 번 더 재시도하도록 변경했다.
+- 즉, 이번 대응부터는 단순 dtype 재시도가 아니라 `모바일 기본 경로`와 `모바일 대체 경로`를 분리해 시도한다.
+
+### 검증 결과
+
+- `npm run lint` 통과
+- `npm run build` 통과
+- 로컬 코드 기준으로 모바일 재시도 흐름과 대체 모델 경로가 반영된 것을 확인했다.
+
+### 남은 리스크 / 다음 액션
+
+- 모바일 브라우저 메모리 한계가 더 작으면 fp32 경로도 실패할 수 있다.
+- 이 경우 다음 단계는 브라우저 로컬 Whisper만으로는 한계가 있을 수 있다.
+- 다음 우선순위는 아래와 같다.
+  1. 모바일 한정 Web Speech API fallback 도입
+  2. 모바일에서는 녹음 기능만 허용하고 분석은 데스크톱 권장 안내 제공
+  3. 모바일 전용 초경량 STT 경로 별도 검토
+
+---
+
 ## 메모
 
 - 현재 프로젝트의 버그 기록 기준 문서는 이 파일이다.
