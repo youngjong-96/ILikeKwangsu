@@ -11,8 +11,25 @@ import { transcribeAudioFileWithLocalWhisper } from "@/lib/stt/localWhisper";
 
 const MOCK_ANALYSIS_LABEL = "Mock Demo";
 
+interface RecordingFormatConfig {
+  mimeType: string;
+  fileExtension: string;
+}
+
+const DEFAULT_RECORDING_FORMAT: RecordingFormatConfig = {
+  mimeType: "audio/webm",
+  fileExtension: "webm",
+};
+
+const RECORDING_FORMAT_CANDIDATES: RecordingFormatConfig[] = [
+  { mimeType: "audio/webm;codecs=opus", fileExtension: "webm" },
+  { mimeType: "audio/mp4", fileExtension: "m4a" },
+  { mimeType: "audio/webm", fileExtension: "webm" },
+  { mimeType: "audio/ogg;codecs=opus", fileExtension: "ogg" },
+];
+
 /**
- * 공백 기준으로 분리한 단어의 출현 빈도를 계산해 많은 순으로 정렬한다.
+ * 공백 기준으로 단어를 분리해 출현 빈도를 계산한 뒤 많이 나온 순서로 정렬한다.
  */
 function buildWordFrequencyResult(text: string): WordResult[] {
   const words = text
@@ -33,9 +50,51 @@ function buildWordFrequencyResult(text: string): WordResult[] {
 }
 
 /**
+ * 현재 브라우저가 지원하는 녹음 포맷 중 가장 호환성이 높은 후보를 고른다.
+ */
+function getSupportedRecordingFormat(): RecordingFormatConfig {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return DEFAULT_RECORDING_FORMAT;
+  }
+
+  return (
+    RECORDING_FORMAT_CANDIDATES.find((candidate) =>
+      MediaRecorder.isTypeSupported(candidate.mimeType),
+    ) ?? DEFAULT_RECORDING_FORMAT
+  );
+}
+
+/**
+ * 실제 녹음 결과의 MIME 타입을 보고 파일 확장자를 안정적으로 결정한다.
+ */
+function getFileExtensionForMimeType(mimeType: string, fallbackExtension: string) {
+  if (mimeType.includes("mp4")) {
+    return "m4a";
+  }
+
+  if (mimeType.includes("ogg")) {
+    return "ogg";
+  }
+
+  if (mimeType.includes("wav")) {
+    return "wav";
+  }
+
+  if (mimeType.includes("mpeg") || mimeType.includes("mp3")) {
+    return "mp3";
+  }
+
+  if (mimeType.includes("webm")) {
+    return "webm";
+  }
+
+  return fallbackExtension;
+}
+
+/**
  * 메인 페이지 컨테이너
  * - 초기 상태에서는 녹음 카드와 업로드 카드를 보여준다.
- * - 분석이 시작되면 결과 화면으로 전환해 워드클라우드와 랭킹을 보여준다.
+ * - 분석을 시작하면 결과 화면으로 전환해 워드클라우드와 랭킹을 보여준다.
  */
 export default function Home() {
   const [isRecording, setIsRecording] = useState(false);
@@ -49,9 +108,10 @@ export default function Home() {
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
+  const recordingFormat = useRef<RecordingFormatConfig>(DEFAULT_RECORDING_FORMAT);
 
   /**
-   * 생성한 오브젝트 URL이 바뀌거나 페이지가 닫힐 때 메모리를 정리한다.
+   * 생성한 오브젝트 URL을 정리해 페이지를 벗어날 때 메모리 누수를 줄인다.
    */
   useEffect(() => {
     return () => {
@@ -62,14 +122,18 @@ export default function Home() {
   }, [audioUrl]);
 
   /**
-   * 마이크 녹음을 시작하거나 종료하고, 종료 시 브라우저용 오디오 파일로 저장한다.
+   * 마이크 녹음을 시작하거나 종료하고, 종료 시 브라우저가 만든 실제 포맷으로 파일을 저장한다.
    */
   const handleToggleRecording = async () => {
     if (!isRecording) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const nextRecordingFormat = getSupportedRecordingFormat();
 
-        mediaRecorder.current = new MediaRecorder(stream);
+        recordingFormat.current = nextRecordingFormat;
+        mediaRecorder.current = nextRecordingFormat.mimeType
+          ? new MediaRecorder(stream, { mimeType: nextRecordingFormat.mimeType })
+          : new MediaRecorder(stream);
         audioChunks.current = [];
 
         mediaRecorder.current.ondataavailable = (event) => {
@@ -79,7 +143,17 @@ export default function Home() {
         };
 
         mediaRecorder.current.onstop = () => {
-          const audioBlob = new Blob(audioChunks.current, { type: "audio/webm" });
+          const recordedMimeType =
+            audioChunks.current.find((chunk) => chunk.type)?.type ||
+            recordingFormat.current.mimeType ||
+            DEFAULT_RECORDING_FORMAT.mimeType;
+          const fileExtension = getFileExtensionForMimeType(
+            recordedMimeType,
+            recordingFormat.current.fileExtension,
+          );
+          const audioBlob = recordedMimeType
+            ? new Blob(audioChunks.current, { type: recordedMimeType })
+            : new Blob(audioChunks.current);
           const nextAudioUrl = URL.createObjectURL(audioBlob);
 
           if (audioUrl) {
@@ -87,7 +161,11 @@ export default function Home() {
           }
 
           setAudioUrl(nextAudioUrl);
-          setAudioFile(new File([audioBlob], "recorded_audio.webm", { type: "audio/webm" }));
+          setAudioFile(
+            new File([audioBlob], `recorded_audio.${fileExtension}`, {
+              type: audioBlob.type || recordedMimeType,
+            }),
+          );
         };
 
         mediaRecorder.current.start();
@@ -108,7 +186,7 @@ export default function Home() {
   };
 
   /**
-   * 현재 선택된 녹음 오디오를 비운다.
+   * 현재 선택된 녹음 또는 업로드 파일을 비운다.
    */
   const handleDeleteAudio = () => {
     if (audioUrl) {
@@ -120,7 +198,7 @@ export default function Home() {
   };
 
   /**
-   * 업로드된 오디오 파일을 상태에 반영하고 미리듣기 URL을 다시 만든다.
+   * 업로드한 오디오 파일을 상태에 반영하고 미리듣기용 URL을 다시 만든다.
    */
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files?.[0]) {

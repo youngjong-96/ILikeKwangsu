@@ -57,7 +57,7 @@ graph TD
 - ONNX Runtime Web
 - Web Audio API
 - MediaRecorder API
-- `react-d3-cloud`
+- 커스텀 WordCloud 컴포넌트
 - Lucide React
 
 ## 현재 분석 흐름
@@ -131,8 +131,6 @@ npm run build
 
 정적 결과물은 `out/` 디렉터리에 생성됩니다.
 
-## Vercel 배포 가이드
-
 이 프로젝트는 정적 export 기반이라 Vercel에 올리기 가장 편한 구조에 가깝습니다.
 
 ### 가장 간단한 배포 순서
@@ -151,7 +149,7 @@ npm run build
 - `npm run build` 통과
 - 데스크톱 Chrome 또는 Edge에서 실제 음성 분석 테스트
 - 첫 분석이 다소 느릴 수 있다는 안내 문구 확인
-- 90초 이하 음성만 허용된다는 점 확인
+- 데스크톱은 90초, 모바일 및 저사양 기기는 30초 이하 음성이 권장된다는 점 확인
 
 ### 배포 후 꼭 확인할 점
 
@@ -174,10 +172,10 @@ npm run build
 ## 현재 한계
 
 - 첫 분석 시 모델 준비 시간이 필요합니다.
-- 저사양 모바일 기기에서는 속도가 느릴 수 있습니다.
+- 저사양 모바일 기기에서는 속도가 느리거나 분석 가능한 길이가 더 짧을 수 있습니다.
 - 현재 단어 분석은 공백 기준 단순 분리입니다.
 - 조사나 어미가 포함된 형태 그대로 집계될 수 있습니다.
-- 토이 배포 기준으로 90초 이하 음성만 분석하도록 제한했습니다.
+- 데스크톱은 90초 이하, 모바일 및 저사양 기기는 30초 이하 음성만 안정적으로 분석하도록 제한했습니다.
 
 ## 앞으로의 확장 방향
 
@@ -199,18 +197,3 @@ npm run build
 - 특정 화자 식별 또는 화자 검증 기능
 - 여러 사람이 말해도 목표 화자의 음성만 골라내는 파이프라인
 - 화자 분리와 화자 인증을 위한 별도 모델 도입
-
-## 참고 링크
-
-- Next.js Static Export  
-  https://nextjs.org/docs/app/guides/static-exports
-- Next.js Deploying  
-  https://nextjs.org/docs/app/getting-started/deploying
-- Vercel Next.js 배포 개요  
-  https://vercel.com/docs/frameworks/nextjs
-- Vercel 기존 프로젝트 import  
-  https://vercel.com/docs/getting-started-with-vercel/import
-- Transformers.js  
-  https://huggingface.co/docs/transformers.js/
-- Transformers.js WebGPU 가이드  
-  https://huggingface.co/docs/transformers.js/guides/webgpu
