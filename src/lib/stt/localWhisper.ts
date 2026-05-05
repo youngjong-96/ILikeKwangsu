@@ -166,7 +166,7 @@ function createMoonshineRuntime(isMobileRuntime: boolean, useAutoLabel: boolean)
     engine: "moonshine",
     device: "wasm",
     modelId: "onnx-community/moonshine-tiny-ko-ONNX",
-    dtype: "q8",
+    dtype: "fp32",
     runtimeLabel: useAutoLabel ? "Auto · Moonshine" : "Moonshine · Korean",
     maxAudioDurationSeconds: isMobileRuntime
       ? MOBILE_MAX_AUDIO_DURATION_SECONDS
