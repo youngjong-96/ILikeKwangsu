@@ -9,6 +9,10 @@ import {
 } from "@huggingface/transformers";
 import { decodeAudioFileToMonoPcm } from "@/lib/audio/decodeAudioFile";
 
+export type LocalSttEngineMode = "auto" | "whisper" | "moonshine";
+type LocalSttEngine = Exclude<LocalSttEngineMode, "auto">;
+type LocalSttDtype = "fp32" | "q8";
+
 export interface LocalWhisperStatus {
   message: string;
   progress: number | null;
@@ -20,16 +24,15 @@ export interface LocalWhisperResult {
   runtimeLabel: string;
 }
 
-type LocalWhisperDtype = "fp32" | "q8";
-
-interface LocalWhisperRuntime {
+interface LocalSttRuntime {
+  engine: LocalSttEngine;
   device: "webgpu" | "wasm";
   modelId: string;
+  dtype: LocalSttDtype;
   runtimeLabel: string;
   maxAudioDurationSeconds: number;
   chunkLengthSeconds: number;
   strideLengthSeconds: number;
-  dtype: LocalWhisperDtype;
 }
 
 interface RuntimeNavigator extends Navigator {
@@ -46,7 +49,7 @@ interface DecodedAudioInput {
 
 const TARGET_SAMPLE_RATE = 16_000;
 const DESKTOP_MAX_AUDIO_DURATION_SECONDS = 90;
-const MOBILE_MAX_AUDIO_DURATION_SECONDS = 20;
+const MOBILE_MAX_AUDIO_DURATION_SECONDS = 30;
 const LOW_MEMORY_DEVICE_THRESHOLD_GB = 4;
 
 let transcriberPromise: Promise<AutomaticSpeechRecognitionPipeline> | null = null;
@@ -79,7 +82,7 @@ async function canUseWebGpu() {
 }
 
 /**
- * 모바일 브라우저나 태블릿처럼 추론 자원이 제한될 가능성이 높은 환경인지 확인한다.
+ * 현재 환경이 모바일 브라우저에 가까운지 확인한다.
  */
 function isLikelyMobileDevice() {
   if (typeof navigator === "undefined") {
@@ -101,7 +104,7 @@ function isLikelyMobileDevice() {
 }
 
 /**
- * 브라우저가 노출하는 기기 메모리 정보를 바탕으로 저사양 장치를 추정한다.
+ * 브라우저가 제공하는 deviceMemory 힌트로 저사양 기기 여부를 추정한다.
  */
 function isLowMemoryDevice() {
   if (typeof navigator === "undefined") {
@@ -115,121 +118,96 @@ function isLowMemoryDevice() {
 }
 
 /**
- * 모바일에서 기본으로 사용할 가장 안전한 Whisper 런타임 구성을 만든다.
+ * 자동 추천 모드에서 어떤 엔진을 우선 사용할지 결정한다.
  */
-function createPrimaryMobileRuntime(): LocalWhisperRuntime {
-  return {
-    device: "wasm",
-    modelId: "Xenova/whisper-tiny",
-    runtimeLabel: "Local Whisper · Mobile Safe",
-    maxAudioDurationSeconds: MOBILE_MAX_AUDIO_DURATION_SECONDS,
-    chunkLengthSeconds: 8,
-    strideLengthSeconds: 2,
-    dtype: "fp32",
-  };
+function getRecommendedSttEngine(): LocalSttEngine {
+  return isLikelyMobileDevice() || isLowMemoryDevice() ? "moonshine" : "whisper";
 }
 
 /**
- * 모바일에서 세션 생성 실패가 반복될 때 사용할 대체 모델 구성을 만든다.
+ * 데스크톱용 Whisper WebGPU 런타임을 만든다.
  */
-function createFallbackMobileRuntime(): LocalWhisperRuntime {
+function createDesktopWhisperWebGpuRuntime(): LocalSttRuntime {
   return {
-    device: "wasm",
-    modelId: "onnx-community/whisper-tiny",
-    runtimeLabel: "Local Whisper · Mobile Fallback",
-    maxAudioDurationSeconds: MOBILE_MAX_AUDIO_DURATION_SECONDS,
-    chunkLengthSeconds: 8,
-    strideLengthSeconds: 2,
-    dtype: "fp32",
-  };
-}
-
-/**
- * 데스크톱 WebGPU 환경에서 사용할 런타임 구성을 만든다.
- */
-function createWebGpuRuntime(): LocalWhisperRuntime {
-  return {
+    engine: "whisper",
     device: "webgpu",
     modelId: "Xenova/whisper-base",
-    runtimeLabel: "Local Whisper · WebGPU",
+    dtype: "fp32",
+    runtimeLabel: "Whisper · WebGPU",
     maxAudioDurationSeconds: DESKTOP_MAX_AUDIO_DURATION_SECONDS,
     chunkLengthSeconds: 20,
     strideLengthSeconds: 4,
-    dtype: "fp32",
   };
 }
 
 /**
- * 데스크톱 WASM 환경에서 사용할 기본 런타임 구성을 만든다.
+ * WASM 환경에서 사용할 기본 Whisper 런타임을 만든다.
  */
-function createDesktopWasmRuntime(): LocalWhisperRuntime {
+function createWasmWhisperRuntime(isMobileRuntime: boolean, useAutoLabel: boolean): LocalSttRuntime {
   return {
+    engine: "whisper",
     device: "wasm",
     modelId: "Xenova/whisper-tiny",
-    runtimeLabel: "Local Whisper · WASM",
-    maxAudioDurationSeconds: DESKTOP_MAX_AUDIO_DURATION_SECONDS,
-    chunkLengthSeconds: 20,
-    strideLengthSeconds: 4,
-    dtype: "q8",
+    dtype: isMobileRuntime ? "fp32" : "q8",
+    runtimeLabel: useAutoLabel ? "Auto · Whisper" : "Whisper · WASM",
+    maxAudioDurationSeconds: isMobileRuntime
+      ? MOBILE_MAX_AUDIO_DURATION_SECONDS
+      : DESKTOP_MAX_AUDIO_DURATION_SECONDS,
+    chunkLengthSeconds: isMobileRuntime ? 10 : 20,
+    strideLengthSeconds: isMobileRuntime ? 2 : 4,
   };
 }
 
 /**
- * 현재 브라우저 성능 조건에 맞는 Whisper 실행 경로와 모델 구성을 고른다.
+ * Moonshine 런타임을 만든다.
  */
-async function resolveLocalWhisperRuntime(): Promise<LocalWhisperRuntime> {
-  if (isLikelyMobileDevice() || isLowMemoryDevice()) {
-    return createPrimaryMobileRuntime();
-  }
-
-  if (await canUseWebGpu()) {
-    return createWebGpuRuntime();
-  }
-
-  return createDesktopWasmRuntime();
+function createMoonshineRuntime(isMobileRuntime: boolean, useAutoLabel: boolean): LocalSttRuntime {
+  return {
+    engine: "moonshine",
+    device: "wasm",
+    modelId: "onnx-community/moonshine-tiny-ko-ONNX",
+    dtype: "q8",
+    runtimeLabel: useAutoLabel ? "Auto · Moonshine" : "Moonshine · Korean",
+    maxAudioDurationSeconds: isMobileRuntime
+      ? MOBILE_MAX_AUDIO_DURATION_SECONDS
+      : DESKTOP_MAX_AUDIO_DURATION_SECONDS,
+    chunkLengthSeconds: isMobileRuntime ? 0 : 0,
+    strideLengthSeconds: 0,
+  };
 }
 
 /**
- * 에러 객체를 사용자 친화적인 판별용 문자열로 정규화한다.
+ * 현재 선택 모드와 기기 조건에 맞는 런타임 구성을 결정한다.
  */
-function toErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
+async function resolveLocalSttRuntime(engineMode: LocalSttEngineMode): Promise<LocalSttRuntime> {
+  const isMobileRuntime = isLikelyMobileDevice() || isLowMemoryDevice();
+  const resolvedEngine = engineMode === "auto" ? getRecommendedSttEngine() : engineMode;
+
+  if (resolvedEngine === "moonshine") {
+    return createMoonshineRuntime(isMobileRuntime, engineMode === "auto");
   }
 
-  if (typeof error === "string") {
-    return error;
+  if (!isMobileRuntime && (await canUseWebGpu())) {
+    const webGpuRuntime = createDesktopWhisperWebGpuRuntime();
+    return engineMode === "auto"
+      ? { ...webGpuRuntime, runtimeLabel: "Auto · Whisper WebGPU" }
+      : webGpuRuntime;
   }
 
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
+  return createWasmWhisperRuntime(isMobileRuntime, engineMode === "auto");
 }
 
 /**
- * 현재 오류가 모바일 ONNX 세션 생성 실패로 볼 수 있는 패턴인지 확인한다.
+ * 런타임 구성 기반으로 파이프라인 캐시 키를 만든다.
  */
-function shouldRetryWithMobileFallback(error: unknown) {
-  const errorMessage = toErrorMessage(error);
-
-  return /Can't create a session|Missing required scale|TransposeDQWeightsForMatMulNBits|DequantizeLinear/i.test(
-    errorMessage,
-  );
+function buildRuntimeCacheKey(runtime: LocalSttRuntime) {
+  return `${runtime.engine}:${runtime.device}:${runtime.modelId}:${runtime.dtype}`;
 }
 
 /**
- * 파이프라인 캐시 키를 런타임 구성 단위로 안정적으로 만든다.
+ * transformers.js 진행 상태를 사용자용 메시지로 바꾼다.
  */
-function buildRuntimeCacheKey(runtime: LocalWhisperRuntime) {
-  return `${runtime.device}:${runtime.modelId}:${runtime.dtype}`;
-}
-
-/**
- * transformers.js 진행 상태를 사용자에게 보여주기 쉬운 문장으로 바꾼다.
- */
-function toStatusMessage(progressInfo: ProgressInfo, runtime: LocalWhisperRuntime): LocalWhisperStatus {
+function toStatusMessage(progressInfo: ProgressInfo, runtime: LocalSttRuntime): LocalWhisperStatus {
   switch (progressInfo.status) {
     case "initiate":
       return {
@@ -266,9 +244,9 @@ function toStatusMessage(progressInfo: ProgressInfo, runtime: LocalWhisperRuntim
 }
 
 /**
- * WASM 경로에서는 스레드를 1개로 제한해 모바일 브라우저의 메모리 부담을 줄인다.
+ * WASM 경로에서는 스레드를 1개로 제한해 브라우저 메모리 부담을 줄인다.
  */
-function configureOnnxWasmRuntime(runtime: LocalWhisperRuntime) {
+function configureOnnxWasmRuntime(runtime: LocalSttRuntime) {
   if (runtime.device !== "wasm" || !env.backends.onnx.wasm) {
     return;
   }
@@ -277,7 +255,7 @@ function configureOnnxWasmRuntime(runtime: LocalWhisperRuntime) {
 }
 
 /**
- * 새 런타임으로 재시도할 수 있도록 캐시된 파이프라인 정보를 초기화한다.
+ * 파이프라인 캐시를 초기화해 다른 런타임으로 안전하게 전환할 수 있게 한다.
  */
 function resetCachedPipeline() {
   transcriberPromise = null;
@@ -285,10 +263,10 @@ function resetCachedPipeline() {
 }
 
 /**
- * 지정한 런타임 구성으로 Whisper 파이프라인을 실제 생성한다.
+ * 지정한 런타임 구성으로 STT 파이프라인을 생성한다.
  */
 async function createPipelineForRuntime(
-  runtime: LocalWhisperRuntime,
+  runtime: LocalSttRuntime,
   onStatusChange?: (status: LocalWhisperStatus) => void,
 ) {
   configureOnnxWasmRuntime(runtime);
@@ -303,26 +281,25 @@ async function createPipelineForRuntime(
 }
 
 /**
- * 싱글톤 형태로 브라우저 로컬 Whisper 파이프라인을 로드한다.
+ * 런타임 구성에 맞는 파이프라인을 싱글톤으로 로드한다.
  */
-async function getLocalWhisperPipeline(
+async function getLocalSttPipeline(
+  runtime: LocalSttRuntime,
   onStatusChange?: (status: LocalWhisperStatus) => void,
-  preferredRuntime?: LocalWhisperRuntime,
-): Promise<{ runtime: LocalWhisperRuntime; transcriber: AutomaticSpeechRecognitionPipeline }> {
+): Promise<AutomaticSpeechRecognitionPipeline> {
   env.allowRemoteModels = true;
 
-  const runtime = preferredRuntime ?? (await resolveLocalWhisperRuntime());
   const runtimeKey = buildRuntimeCacheKey(runtime);
 
   if (!transcriberPromise || transcriberRuntimeKey !== runtimeKey) {
     transcriberRuntimeKey = runtimeKey;
     transcriberPromise = createPipelineForRuntime(runtime, onStatusChange).catch(async (error) => {
-      if (runtime.device === "webgpu") {
-        const fallbackRuntime = createDesktopWasmRuntime();
+      if (runtime.engine === "whisper" && runtime.device === "webgpu") {
+        const fallbackRuntime = createWasmWhisperRuntime(false, false);
 
         transcriberRuntimeKey = buildRuntimeCacheKey(fallbackRuntime);
         onStatusChange?.({
-          message: "빠른 모드를 사용할 수 없어 호환 모드로 전환했어요. 분석은 계속됩니다.",
+          message: "빠른 모드를 사용할 수 없어 Whisper 호환 모드로 전환했어요.",
           progress: null,
         });
 
@@ -339,53 +316,76 @@ async function getLocalWhisperPipeline(
     });
   }
 
-  return {
-    runtime,
-    transcriber: await transcriberPromise,
-  };
+  return await transcriberPromise;
 }
 
 /**
- * 디코딩된 오디오를 지정한 런타임으로 실제 전사한다.
+ * 엔진별 전사 옵션을 구성한다.
+ */
+function buildTranscriptionOptions(runtime: LocalSttRuntime) {
+  if (runtime.engine === "whisper") {
+    return {
+      chunk_length_s: runtime.chunkLengthSeconds,
+      stride_length_s: runtime.strideLengthSeconds,
+      language: "korean",
+      task: "transcribe" as const,
+    };
+  }
+
+  return {};
+}
+
+/**
+ * 디코딩된 오디오 길이가 현재 런타임 제한을 넘는지 확인한다.
+ */
+function validateAudioDuration(decodedAudio: DecodedAudioInput, runtime: LocalSttRuntime) {
+  if (decodedAudio.durationSeconds <= runtime.maxAudioDurationSeconds) {
+    return;
+  }
+
+  throw new Error(
+    `이 모드에서는 ${runtime.maxAudioDurationSeconds}초 이하 음성만 안정적으로 분석할 수 있습니다.`,
+  );
+}
+
+/**
+ * 지정한 런타임으로 오디오를 실제 전사한다.
  */
 async function transcribeDecodedAudioWithRuntime(
   decodedAudio: DecodedAudioInput,
-  runtime: LocalWhisperRuntime,
+  runtime: LocalSttRuntime,
   onStatusChange?: (status: LocalWhisperStatus) => void,
 ): Promise<LocalWhisperResult> {
-  if (decodedAudio.durationSeconds > runtime.maxAudioDurationSeconds) {
-    throw new Error(`이 기기에서는 ${runtime.maxAudioDurationSeconds}초 이하 음성만 안정적으로 분석할 수 있습니다.`);
-  }
+  validateAudioDuration(decodedAudio, runtime);
 
-  const { runtime: resolvedRuntime, transcriber } = await getLocalWhisperPipeline(onStatusChange, runtime);
+  const transcriber = await getLocalSttPipeline(runtime, onStatusChange);
 
   onStatusChange?.({
-    message: `${resolvedRuntime.runtimeLabel}로 음성을 텍스트로 바꾸고 있어요.`,
+    message: `${runtime.runtimeLabel}로 음성을 텍스트로 바꾸고 있어요.`,
     progress: null,
   });
 
-  const output = (await transcriber(decodedAudio.pcmData, {
-    chunk_length_s: resolvedRuntime.chunkLengthSeconds,
-    stride_length_s: resolvedRuntime.strideLengthSeconds,
-    language: "korean",
-    task: "transcribe",
-  })) as AutomaticSpeechRecognitionOutput;
+  const output = (await transcriber(
+    decodedAudio.pcmData,
+    buildTranscriptionOptions(runtime),
+  )) as AutomaticSpeechRecognitionOutput;
 
   return {
     text: output.text.trim(),
     durationSeconds: decodedAudio.durationSeconds,
-    runtimeLabel: resolvedRuntime.runtimeLabel,
+    runtimeLabel: runtime.runtimeLabel,
   };
 }
 
 /**
- * 업로드 또는 녹음된 오디오 파일을 브라우저 로컬 Whisper로 전사한다.
+ * 업로드 또는 녹음된 오디오 파일을 현재 선택 모드에 맞는 로컬 STT로 전사한다.
  */
-export async function transcribeAudioFileWithLocalWhisper(
+export async function transcribeAudioFileLocally(
   file: File,
+  engineMode: LocalSttEngineMode,
   onStatusChange?: (status: LocalWhisperStatus) => void,
 ): Promise<LocalWhisperResult> {
-  const preferredRuntime = await resolveLocalWhisperRuntime();
+  const runtime = await resolveLocalSttRuntime(engineMode);
 
   onStatusChange?.({
     message: "업로드한 음성을 분석하기 좋은 형식으로 정리하고 있어요.",
@@ -394,26 +394,5 @@ export async function transcribeAudioFileWithLocalWhisper(
 
   const decodedAudio = await decodeAudioFileToMonoPcm(file, TARGET_SAMPLE_RATE);
 
-  try {
-    return await transcribeDecodedAudioWithRuntime(decodedAudio, preferredRuntime, onStatusChange);
-  } catch (error) {
-    const shouldUseMobileFallback =
-      preferredRuntime.runtimeLabel.includes("Mobile") && shouldRetryWithMobileFallback(error);
-
-    if (!shouldUseMobileFallback) {
-      throw error;
-    }
-
-    resetCachedPipeline();
-    onStatusChange?.({
-      message: "현재 기기와의 호환성 문제로 다른 모바일 안전 모드로 다시 시도하고 있어요.",
-      progress: null,
-    });
-
-    return await transcribeDecodedAudioWithRuntime(
-      decodedAudio,
-      createFallbackMobileRuntime(),
-      onStatusChange,
-    );
-  }
+  return await transcribeDecodedAudioWithRuntime(decodedAudio, runtime, onStatusChange);
 }

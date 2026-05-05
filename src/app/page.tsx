@@ -7,7 +7,10 @@ import FileUploadCard from "@/components/FileUploadCard";
 import AnalysisReport from "@/components/AnalysisReport";
 import type { WordResult } from "@/components/ResultBadges";
 import { MOCK_STT_RESULT, MOCK_STT_TEXT } from "@/app/mock/sttMockData";
-import { transcribeAudioFileWithLocalWhisper } from "@/lib/stt/localWhisper";
+import {
+  transcribeAudioFileLocally,
+  type LocalSttEngineMode,
+} from "@/lib/stt/localWhisper";
 
 const MOCK_ANALYSIS_LABEL = "Mock Demo";
 
@@ -105,6 +108,7 @@ export default function Home() {
   const [transcribedText, setTranscribedText] = useState("");
   const [analysisLabel, setAnalysisLabel] = useState("");
   const [analysisStatusText, setAnalysisStatusText] = useState("");
+  const [sttEngineMode, setSttEngineMode] = useState<LocalSttEngineMode>("auto");
 
   const mediaRecorder = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
@@ -216,7 +220,7 @@ export default function Home() {
   };
 
   /**
-   * 실제 오디오가 있으면 브라우저 로컬 Whisper로, 없으면 mock 데이터로 분석을 진행한다.
+   * 실제 오디오가 있으면 선택된 로컬 STT 엔진으로, 없으면 mock 데이터로 분석을 진행한다.
    */
   const handleAnalyze = async () => {
     setIsAnalyzing(true);
@@ -235,9 +239,13 @@ export default function Home() {
     }
 
     try {
-      const transcriptionResult = await transcribeAudioFileWithLocalWhisper(audioFile, (status) => {
-        setAnalysisStatusText(status.message);
-      });
+      const transcriptionResult = await transcribeAudioFileLocally(
+        audioFile,
+        sttEngineMode,
+        (status) => {
+          setAnalysisStatusText(status.message);
+        },
+      );
       const wordFrequencyResult = buildWordFrequencyResult(transcriptionResult.text);
 
       if (wordFrequencyResult.length === 0) {
@@ -252,7 +260,7 @@ export default function Home() {
       alert(
         error instanceof Error
           ? error.message
-          : "브라우저 로컬 Whisper 분석 중 오류가 발생했습니다.",
+          : "브라우저 로컬 STT 분석 중 오류가 발생했습니다.",
       );
     } finally {
       setIsAnalyzing(false);
@@ -304,8 +312,10 @@ export default function Home() {
             <FileUploadCard
               audioFile={audioFile}
               isAnalyzing={isAnalyzing}
+              sttEngineMode={sttEngineMode}
               onFileUpload={handleFileUpload}
               onAnalyze={handleAnalyze}
+              onSttEngineModeChange={setSttEngineMode}
             />
           </div>
         )}
