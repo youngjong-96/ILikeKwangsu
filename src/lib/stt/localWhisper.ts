@@ -27,7 +27,12 @@ interface LocalWhisperRuntime {
   maxAudioDurationSeconds: number;
   chunkLengthSeconds: number;
   strideLengthSeconds: number;
+  dtype?: LocalWhisperDtypeConfig;
+  fallbackDtype?: LocalWhisperDtypeConfig;
 }
+
+type LocalWhisperDtype = "fp32" | "q8";
+type LocalWhisperDtypeConfig = LocalWhisperDtype | Record<string, LocalWhisperDtype>;
 
 interface RuntimeNavigator extends Navigator {
   deviceMemory?: number;
@@ -40,6 +45,12 @@ const TARGET_SAMPLE_RATE = 16_000;
 const DESKTOP_MAX_AUDIO_DURATION_SECONDS = 90;
 const MOBILE_MAX_AUDIO_DURATION_SECONDS = 30;
 const LOW_MEMORY_DEVICE_THRESHOLD_GB = 4;
+const MOBILE_SAFE_DTYPE: LocalWhisperDtypeConfig = {
+  audio_encoder: "q8",
+  embed_tokens: "fp32",
+  decoder_model_merged: "fp32",
+};
+const FULL_PRECISION_DTYPE: LocalWhisperDtypeConfig = "fp32";
 
 let transcriberPromise: Promise<AutomaticSpeechRecognitionPipeline> | null = null;
 let transcriberRuntimeKey: string | null = null;
@@ -107,6 +118,37 @@ function isLowMemoryDevice() {
 }
 
 /**
+ * dtype 설정을 캐시 키에 안전하게 반영할 수 있는 문자열로 직렬화한다.
+ */
+function serializeDtype(dtype?: LocalWhisperDtypeConfig) {
+  if (!dtype) {
+    return "auto";
+  }
+
+  return typeof dtype === "string" ? dtype : JSON.stringify(dtype);
+}
+
+/**
+ * 현재 런타임 구성을 기반으로 파이프라인 캐시 키를 만든다.
+ */
+function buildRuntimeCacheKey(runtime: LocalWhisperRuntime) {
+  return `${runtime.device}:${runtime.modelId}:${serializeDtype(runtime.dtype)}`;
+}
+
+/**
+ * 모바일 브라우저에서 양자화된 ONNX 세션 생성이 실패했을 때 재시도가 필요한 오류인지 판별한다.
+ */
+function shouldRetryWithSaferDtype(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /Can't create a session|Missing required scale|TransposeDQWeightsForMatMulNBits/i.test(
+    error.message,
+  );
+}
+
+/**
  * 현재 브라우저 성능 조건에 맞는 Whisper 실행 경로와 모델 구성을 고른다.
  */
 async function resolveLocalWhisperRuntime(): Promise<LocalWhisperRuntime> {
@@ -118,6 +160,8 @@ async function resolveLocalWhisperRuntime(): Promise<LocalWhisperRuntime> {
       maxAudioDurationSeconds: MOBILE_MAX_AUDIO_DURATION_SECONDS,
       chunkLengthSeconds: 10,
       strideLengthSeconds: 2,
+      dtype: MOBILE_SAFE_DTYPE,
+      fallbackDtype: FULL_PRECISION_DTYPE,
     };
   }
 
@@ -129,6 +173,7 @@ async function resolveLocalWhisperRuntime(): Promise<LocalWhisperRuntime> {
       maxAudioDurationSeconds: DESKTOP_MAX_AUDIO_DURATION_SECONDS,
       chunkLengthSeconds: 20,
       strideLengthSeconds: 4,
+      dtype: "fp32",
     };
   }
 
@@ -139,6 +184,7 @@ async function resolveLocalWhisperRuntime(): Promise<LocalWhisperRuntime> {
     maxAudioDurationSeconds: DESKTOP_MAX_AUDIO_DURATION_SECONDS,
     chunkLengthSeconds: 20,
     strideLengthSeconds: 4,
+    dtype: "q8",
   };
 }
 
@@ -202,7 +248,7 @@ async function getLocalWhisperPipeline(
   env.allowRemoteModels = true;
 
   const runtime = preferredRuntime ?? (await resolveLocalWhisperRuntime());
-  const runtimeKey = `${runtime.device}:${runtime.modelId}`;
+  const runtimeKey = buildRuntimeCacheKey(runtime);
 
   configureOnnxWasmRuntime(runtime);
 
@@ -210,10 +256,35 @@ async function getLocalWhisperPipeline(
     transcriberRuntimeKey = runtimeKey;
     transcriberPromise = pipeline("automatic-speech-recognition", runtime.modelId, {
       device: runtime.device,
+      dtype: runtime.dtype,
       progress_callback: (progressInfo) => {
         onStatusChange?.(toStatusMessage(progressInfo, runtime));
       },
     }).catch(async (error) => {
+      if (runtime.fallbackDtype && shouldRetryWithSaferDtype(error)) {
+        const saferRuntime: LocalWhisperRuntime = {
+          ...runtime,
+          runtimeLabel: `${runtime.runtimeLabel} · Safe`,
+          dtype: runtime.fallbackDtype,
+          fallbackDtype: undefined,
+        };
+
+        configureOnnxWasmRuntime(saferRuntime);
+        transcriberRuntimeKey = buildRuntimeCacheKey(saferRuntime);
+        onStatusChange?.({
+          message: "현재 기기와 더 잘 맞는 안전 모드로 다시 준비하고 있어요.",
+          progress: null,
+        });
+
+        return pipeline("automatic-speech-recognition", saferRuntime.modelId, {
+          device: saferRuntime.device,
+          dtype: saferRuntime.dtype,
+          progress_callback: (progressInfo) => {
+            onStatusChange?.(toStatusMessage(progressInfo, saferRuntime));
+          },
+        });
+      }
+
       if (runtime.device === "webgpu") {
         const fallbackRuntime: LocalWhisperRuntime = {
           device: "wasm",
@@ -222,10 +293,11 @@ async function getLocalWhisperPipeline(
           maxAudioDurationSeconds: DESKTOP_MAX_AUDIO_DURATION_SECONDS,
           chunkLengthSeconds: 20,
           strideLengthSeconds: 4,
+          dtype: "q8",
         };
 
         configureOnnxWasmRuntime(fallbackRuntime);
-        transcriberRuntimeKey = `${fallbackRuntime.device}:${fallbackRuntime.modelId}`;
+        transcriberRuntimeKey = buildRuntimeCacheKey(fallbackRuntime);
         onStatusChange?.({
           message: "빠른 모드를 사용할 수 없어 호환 모드로 전환했어요. 분석은 계속됩니다.",
           progress: null,
@@ -233,6 +305,7 @@ async function getLocalWhisperPipeline(
 
         return pipeline("automatic-speech-recognition", fallbackRuntime.modelId, {
           device: fallbackRuntime.device,
+          dtype: fallbackRuntime.dtype,
           progress_callback: (progressInfo) => {
             onStatusChange?.(toStatusMessage(progressInfo, fallbackRuntime));
           },
@@ -251,16 +324,27 @@ async function getLocalWhisperPipeline(
   }
 
   const transcriber = await transcriberPromise;
-  const resolvedRuntime = transcriberRuntimeKey?.startsWith("wasm:")
-    ? {
-        device: "wasm" as const,
-        modelId: "Xenova/whisper-tiny",
-        runtimeLabel: "Local Whisper · WASM",
-        maxAudioDurationSeconds: DESKTOP_MAX_AUDIO_DURATION_SECONDS,
-        chunkLengthSeconds: 20,
-        strideLengthSeconds: 4,
-      }
-    : runtime;
+  const resolvedRuntime =
+    transcriberRuntimeKey === runtimeKey
+      ? runtime
+      : transcriberRuntimeKey?.includes(`:${serializeDtype(FULL_PRECISION_DTYPE)}`)
+        ? {
+            ...runtime,
+            runtimeLabel: `${runtime.runtimeLabel} · Safe`,
+            dtype: FULL_PRECISION_DTYPE,
+            fallbackDtype: undefined,
+          }
+        : transcriberRuntimeKey?.startsWith("wasm:")
+          ? {
+              device: "wasm" as const,
+              modelId: "Xenova/whisper-tiny",
+              runtimeLabel: "Local Whisper · WASM",
+              maxAudioDurationSeconds: DESKTOP_MAX_AUDIO_DURATION_SECONDS,
+              chunkLengthSeconds: 20,
+              strideLengthSeconds: 4,
+              dtype: "q8" as const,
+            }
+          : runtime;
 
   return {
     runtime: resolvedRuntime,
